@@ -1,4 +1,6 @@
-# AquaCell – FLIP fluid-pendant reference model (ShaderToy)
+# AquaCell – FLIP fluid-pendant reference model [(ShaderToy)](https://www.shadertoy.com/view/NXyGWd)
+
+
 
 Software reference for a small FLIP fluid ASIC, modelled on mitxela's Fluid Simulation
 Pendant (which follows Ten Minute Physics "How to write a FLIP Water Simulator").
