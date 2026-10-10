@@ -43,13 +43,13 @@ class Main:
 class Flip:
     def __init__(self):
         self.grid_size = 16 # 16x16 grid
-        self.amount = 256 # number of particles
+        self.amount = 13 ** 2 # number of particles (Perfect square for grid initialization)
         self.gravity_mag = 40.0
         self.gravity = np.array([0, -self.gravity_mag]) # gravity vector
         self.dt = 1/60 # time step (seconds)
-        self.flip_ratio = 0.85 # flip ratio (0 < flip_ratio < 1) 1 pure flip, 0 pure pic
+        self.flip_ratio = 0.7 # flip ratio (0 < flip_ratio < 1) 1 pure flip, 0 pure pic
         
-        self.k = 2.0 # pressure / density drift Stiffness coefficient
+        self.k = 1.0 # pressure / density drift Stiffness coefficient
         self.vmax = 40.0 # maximum velocity for particles
         self.O = 1.9 # Overrelaxtions (1 < O < 2)
         self.itterations = 35 # number of iterations for pressure solver
@@ -216,8 +216,8 @@ class Flip:
         self.positions += self.velocity * self.dt   # advect
         self.push_apart();                          self._check("push_apart")
         self.collide_walls();                       self._check("walls")
-        self.update_cell_type();                    
         self.Particle_to_Grid();                    self._check("particle_to_grid")
+        self.update_cell_type();                    
         self.Divergence();                          self._check("pressure_solve")
         self.Grid_to_Particle();                    self._check("grid_to_particle")
         
@@ -250,13 +250,15 @@ class Flip:
     
     def update_cell_type(self):    
         N = self.grid_size
-        count = np.zeros((N, N), dtype=np.int32)
-        i = np.clip(np.floor(self.positions[: , 0]).astype(np.int32), 0, N - 1)
-        j = np.clip(np.floor(self.positions[: , 1]).astype(np.int32), 0, N - 1)
-        np.add.at(count, (i, j), 1)
         self.cell_type.fill(AIR)
         self.cell_type[~self.inside] = SOLID
-        self.cell_type[(count > 0) & self.inside] = WATER
+        # count = np.zeros((N, N), dtype=np.int32)
+        # i = np.clip(np.floor(self.positions[: , 0]).astype(np.int32), 0, N - 1)
+        # j = np.clip(np.floor(self.positions[: , 1]).astype(np.int32), 0, N - 1)
+        # np.add.at(count, (i, j), 1)
+        
+        water = (self.density > 0.1  * self.rest_density) & self.inside
+        self.cell_type[water] = WATER
         
         # which faces may be trusted when going from grid to particle (only faces with at least one water cell)
         ct = np.pad(self.cell_type, 1, constant_values=SOLID)
@@ -312,10 +314,7 @@ class Flip:
             v_pic = np.where(ok, vnew, v)
             v_flip = np.where(ok, vdelta, 0.0)
             self.velocity[:, comp] = (1 -r) * v_pic + r * (v + v_flip)
-            
-
-        
-        
+                
     def Particle_to_Grid(self):       
         # # U
         # gx = np.clip(self.positions[:, 0] * self.grid_size ,0, self.grid_size - 1 - 1e-6)
@@ -415,6 +414,8 @@ class Flip:
         self._scatter(self.v_sum, self.v_weight, p[:, 0] - 0.5, p[:, 1], self.velocity[:, 1])
         self._scatter(None, self.density, p[:, 0] - 0.5, p[:, 1] - 0.5) # density at cell centers
         
+        
+        
         self.u.fill(0) ; self.v.fill(0)
         m = self.u_weight > 0 ; self.u[m] = self.u_sum[m] / self.u_weight[m]
         m = self.v_weight > 0 ; self.v[m] = self.v_sum[m] / self.v_weight[m]
@@ -423,8 +424,7 @@ class Flip:
         self.v *= self.v_open
         self.u_old = self.u.copy() # FLIP needs to remember the previous grid velocity to compute the change in velocity
         self.v_old = self.v.copy()
-        
-        
+               
     # pressure solve (Gauss-Seidel iteration. red-black ordering)         [10-minute-physics metho]
     def Divergence(self):        
         # for _ in range(self.itterations):
@@ -462,11 +462,7 @@ class Flip:
         self.divergence.fill(0)
         i , j = wi , wj
         self.divergence[i, j] = (self.u[i + 1, j] - self.u[i, j]) + (self.v[i, j + 1] - self.v[i, j])
-        
-        
             
-            
-        
     def dense_to_grid(self):    
         self.density.fill(0)
         i = np.floor(self.positions[:, 0] * self.grid_size).astype(np.int32)
@@ -474,8 +470,6 @@ class Flip:
         valid = (i >=0 ) & (i < self.grid_size) & (j >= 0) & (j < self.grid_size)
         np.add.at(self.density, (i[valid], j[valid]), 1)
         
-    
-    
     def draw(self):
         cell = width / self.grid_size
         for i in range(self.amount):
@@ -502,7 +496,7 @@ class Flip:
                 if self.cell_type[x, y] == SOLID:
                     draw_rectangle(cx, cy, cw, ch, DARKERGRAY)
                 elif self.cell_type[x, y] == WATER:
-                    draw_rectangle(cx, cy, cw, ch, WATER_COLOR)
+                    draw_rectangle(cx, cy, cw, ch, fade(WATER_COLOR, (self.density[x, y] / self.rest_density)))
                 
                 draw_rectangle_lines(cx, cy, cw, ch, BLACK)
                     
@@ -578,6 +572,7 @@ class Flip:
 
             self.positions[a] -= correction
             self.positions[b] += correction
+            self.update_cell_type()
         
         
 if __name__ == "__main__":
