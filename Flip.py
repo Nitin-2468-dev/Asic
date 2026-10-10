@@ -1,5 +1,5 @@
-import dis
 from pyray import *
+import  pyray as pr
 import numpy as np
 
 width = 800
@@ -16,6 +16,8 @@ class Main:
     def __init__(self):
         self.title = "Flip Example"
         init_window(width, height, self.title)
+        set_window_state(ConfigFlags.FLAG_WINDOW_UNDECORATED)
+        set_config_flags(ConfigFlags.FLAG_VSYNC_HINT)   
         set_target_fps(60)
         self.f = Flip()
         
@@ -32,12 +34,17 @@ class Main:
     def update(self):
         if is_key_pressed(KeyboardKey.KEY_R):
             self.f.reset()
+        self.f.grab()
+        
+        
         self.f.update()
     
     def draw(self):
         self.f.draw_grid()
         self.f.draw()
         draw_fps(10, 10)
+        
+    
     
     
 class Flip:
@@ -46,6 +53,9 @@ class Flip:
         self.amount = 13 ** 2 # number of particles (Perfect square for grid initialization)
         self.gravity_mag = 40.0
         self.gravity = np.array([0, -self.gravity_mag]) # gravity vector
+        self.base_gravity = np.array([0, -self.gravity_mag]) # gravity vector
+        self.win_v = np.zeros(2)
+        self.push = np.zeros(2)
         self.dt = 1/60 # time step (seconds)
         self.flip_ratio = 0.7 # flip ratio (0 < flip_ratio < 1) 1 pure flip, 0 pure pic
         
@@ -57,8 +67,8 @@ class Flip:
         self.spacing = 0.65 # spacing between particles
         self.rest_density = 1 / self.spacing**2 # divergence coefficient
         self.min_distance = 0.6 # minimum distance between particles for collision detection
-        self.push_relax = 1.0 
-        self.push_itters = 2
+        self.push_relax = 0.5 
+        self.push_itters = 1
         
         self.tablesize  =  self.grid_size * self.grid_size # size of the hash table for particle collision detection
         self.debug_check = True
@@ -66,6 +76,9 @@ class Flip:
         self._build_contanter()
         self.reset()
         
+        self.last_x  = get_mouse_x()
+        self.last_y = get_mouse_y()
+
         # # Partical 
         # self.positions= np.zeros((self.amount, 2), dtype=np.float32) # x , y 
         # self.velocity= np.zeros((self.amount, 2), dtype=np.float32) #  u , v 
@@ -107,7 +120,34 @@ class Flip:
         # # self.cell_start[1:] = np.cumsum(np.sum(self.cell_type == 0, axis=1))
         # #self.s[self.solid_mask] = 1 # 0 for differentiate solid cells from fluid cells
         # self.cell_type[self.solid_mask & ~(y < self.grid_size / 2)] = WATER
-        
+
+    def grab(self):
+            self.mx = get_mouse_x()
+            self.my = get_mouse_y()
+    
+            if is_mouse_button_down(MouseButton.MOUSE_BUTTON_LEFT):
+                dx = self.mx - self.last_x
+                dy = self.my - self.last_y
+                v = np.array([dx, -dy])
+                a = (v - self.win_v) * 3600 / self.dt
+                self.win_v = v
+                self.push += 0.3 * (a - self.push)
+                
+                g = self.base_gravity - 0.5 * self.push
+                n = np.hypot(*g)
+                if n > 60:
+                    g = g / n * 60
+                self.gravity = g
+                
+                if dx != 0 or dy != 0:  # only move if there's actual movement
+                    self.gravity_mag = np.hypot(dx, dy) * 0.5
+                    self.gravity = np.array([dx, -dy]) * 0.5
+                    
+                    set_window_position(int(get_window_position().x + dx),int(get_window_position().y + dy))
+            else:
+                self.last_x = self.mx
+                self.last_y = self.my   
+            
     def _build_contanter(self):
         N = self.grid_size
         ix , iy = np.indices((N, N))
