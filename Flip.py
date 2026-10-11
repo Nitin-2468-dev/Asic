@@ -20,6 +20,7 @@ class Main:
         set_config_flags(ConfigFlags.FLAG_VSYNC_HINT)   
         set_target_fps(60)
         self.f = Flip()
+        self.acc = 0.0
         
     def loop(self):
         while not window_should_close():
@@ -35,6 +36,9 @@ class Main:
         if is_key_pressed(KeyboardKey.KEY_R):
             self.f.reset()
         self.f.grab()
+        self.acc = min(self.acc + get_frame_time(), 3 * self.f.dt)
+        while self.acc >= self.f.dt:
+            self.acc -= self.f.dt
         
         
         self.f.update()
@@ -50,14 +54,16 @@ class Main:
 class Flip:
     def __init__(self):
         self.grid_size = 16 # 16x16 grid
-        self.amount = 13 ** 2 # number of particles (Perfect square for grid initialization)
-        self.gravity_mag = 40.0
+        self.amount = 14 ** 2 # number of particles (Perfect square for grid initialization)
+        self.gravity_mag = 60.0
+        self.move_per_pixel = 20 
         self.gravity = np.array([0, -self.gravity_mag]) # gravity vector
         self.base_gravity = np.array([0, -self.gravity_mag]) # gravity vector
         self.win_v = np.zeros(2)
         self.push = np.zeros(2)
         self.dt = 1/60 # time step (seconds)
-        self.flip_ratio = 0.7 # flip ratio (0 < flip_ratio < 1) 1 pure flip, 0 pure pic
+        self.flip_ratio = 0.95 # flip ratio (0 < flip_ratio < 1) 1 pure flip, 0 pure pic
+        self.wall_friction = 0.7 # wall friction coefficient
         
         self.k = 1.0 # pressure / density drift Stiffness coefficient
         self.vmax = 40.0 # maximum velocity for particles
@@ -68,7 +74,7 @@ class Flip:
         self.rest_density = 1 / self.spacing**2 # divergence coefficient
         self.min_distance = 0.6 # minimum distance between particles for collision detection
         self.push_relax = 0.5 
-        self.push_itters = 1
+        self.push_itters = 3
         
         self.tablesize  =  self.grid_size * self.grid_size # size of the hash table for particle collision detection
         self.debug_check = True
@@ -124,29 +130,31 @@ class Flip:
     def grab(self):
             self.mx = get_mouse_x()
             self.my = get_mouse_y()
-    
+
+            dx = dy = 0
             if is_mouse_button_down(MouseButton.MOUSE_BUTTON_LEFT):
                 dx = self.mx - self.last_x
                 dy = self.my - self.last_y
-                v = np.array([dx, -dy])
-                a = (v - self.win_v) * 3600 / self.dt
-                self.win_v = v
-                self.push += 0.3 * (a - self.push)
-                
-                g = self.base_gravity - 0.5 * self.push
-                n = np.hypot(*g)
-                if n > 60:
-                    g = g / n * 60
-                self.gravity = g
-                
-                if dx != 0 or dy != 0:  # only move if there's actual movement
-                    self.gravity_mag = np.hypot(dx, dy) * 0.5
-                    self.gravity = np.array([dx, -dy]) * 0.5
-                    
-                    set_window_position(int(get_window_position().x + dx),int(get_window_position().y + dy))
+                if dx or dy :
+                    p = get_window_position()
+                    set_window_position(int(p.x + dx), int(p.y + dy))
             else:
                 self.last_x = self.mx
                 self.last_y = self.my   
+            
+            ft = max(get_frame_time(), 1e-3)
+            v = np.array([dx, -dy], dtype=np.float32) /ft
+            #self.win_v = v
+            a = (v - self.win_v) / ft / self.move_per_pixel # acceleration in pixels/s^2
+            self.win_v = v
+            self.push += 0.4 * (a - self.push)
+            
+            g = self.base_gravity - 0.5 * self.push
+            n = np.hypot(*g)
+            if n > 1.5 * self.gravity_mag:
+                g *= (1.5 * self.gravity_mag / n)
+            self.gravity = g
+            
             
     def _build_contanter(self):
         N = self.grid_size
@@ -267,14 +275,18 @@ class Flip:
         
     def push_apart(self):
         md = self.min_distance
+        p = self.positions
+        d = p[:, None, :] - p[None, :, :] # d[i,j] = p[i] - p[j]    (N.N,2)
+        d2 = (d * d).sum(axis=-1)
+        I, J = np.nonzero(np.triu(d2 < (2 * md) ** 2, 1)) 
         for _ in range(self.push_itters):
-            p = self.positions
-            d = p[:, None, :] - p[None, :, :] # d[i,j] = p[i] - p[j]    (N.N,2)
-            d2 = (d * d).sum(axis=-1)
-            near = (d2 < md * md) & (d2 > 1e-10) # avoid self-collision
-            dist = np.sqrt(np.where(near, d2, 1.0)) # avoid division by zero
-            push = np.where(near, 0.5 * (md - dist) / dist, 0.0) # push amount
-            self.positions = p + self.push_relax * (push[:,:,None] * d).sum(axis=1)
+            dv = p[I] - p[J]
+            dist = np.sqrt((dv * dv).sum(axis=1))
+            m = (dist < md) & (dist > 1e-5)
+            corr = dv[m] * (self.push_relax * 0.5 * (md - dist[m]) / dist[m])[:, None]
+            np.add.at(p, I[m], corr)
+            np.add.at(p, J[m], -corr)
+        self.positions = p.astype(self.positions.dtype)
 
     def collide_walls(self):
         r = self.positions - self.center
@@ -287,6 +299,9 @@ class Flip:
             vn = (self.velocity[out] * n).sum(axis=1)
             vn = np.maximum(vn, 0.0) # only remove Outward velocity
             self.velocity[out] -= n * vn[:, None]
+            vv = self.velocity[out]
+            vnn = (self.velocity[out] * n).sum(axis=1)[:, None] * n               # what is left along the normal
+            self.velocity[out] = vnn + (vv - vnn) * self.wall_friction   # slow the sliding along the wall
     
     def update_cell_type(self):    
         N = self.grid_size
@@ -537,8 +552,9 @@ class Flip:
                     draw_rectangle(cx, cy, cw, ch, DARKERGRAY)
                 elif self.cell_type[x, y] == WATER:
                     draw_rectangle(cx, cy, cw, ch, fade(WATER_COLOR, (self.density[x, y] / self.rest_density)))
-                
-                draw_rectangle_lines(cx, cy, cw, ch, BLACK)
+        for y in range(N):
+            for x in range(N):
+                draw_rectangle_lines(x * cw, (N - y -1) * cw, cw, cw, BLACK)
                     
     def collistion(self):
         xi = np.floor(self.positions[:, 0] * self.grid_size).astype(np.int32)
