@@ -38,10 +38,11 @@ class Main:
         self.f.grab()
         self.acc = min(self.acc + get_frame_time(), 3 * self.f.dt)
         while self.acc >= self.f.dt:
+            self.f.update()
             self.acc -= self.f.dt
         
         
-        self.f.update()
+        
     
     def draw(self):
         self.f.draw_grid()
