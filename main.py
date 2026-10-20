@@ -1,9 +1,11 @@
 import numpy as np
 from pyray import (
+     Color,
     ConfigFlags,
     KeyboardKey,
     MouseButton,
     close_window,
+    draw_text,
     get_frame_time,
     get_mouse_x,
     get_mouse_y,
@@ -19,23 +21,27 @@ from pyray import (
     window_should_close,
 )
 from rendering import HEIGHT, WIDTH, PendantRenderer
+from sim_hardware_model import HardwareFlip
 from simulation_fixed import FixedFlip
 
 
 class MainApp:
     def __init__(self):
-        self.title = "Fluid Pendant Simulation (IS31FL3741A / LIS2DW12)"
+        self.title = "Fluid Pendant ASIC Model (Q4.12 Integer + Spatial Hash + LUTs)"
         init_window(WIDTH, HEIGHT, self.title)
         set_window_state(ConfigFlags.FLAG_WINDOW_UNDECORATED)
         set_config_flags(ConfigFlags.FLAG_VSYNC_HINT)
         set_target_fps(60)
 
-        self.sim = FixedFlip()
+        self.hw_sim = HardwareFlip()
+        self.fp_sim = FixedFlip()
+        self.use_hw_model = True
+        self.sim = self.hw_sim
+
         self.renderer = PendantRenderer(WIDTH, HEIGHT)
         self.acc = 0.0
         self.frame_idx = 0
 
-        # Accelerometer & interaction state (matching buffer_b.glsl)
         self.gravity = np.array([0.0, -self.sim.gravity_mag], dtype=np.float32)
         self.auto_swirl = False
         self.swirl_phase = 0.0
@@ -52,9 +58,11 @@ class MainApp:
         close_window()
 
     def update(self):
-        # Keyboard toggles
         if is_key_pressed(KeyboardKey.KEY_R):
             self.sim.reset()
+        if is_key_pressed(KeyboardKey.KEY_H):
+            self.use_hw_model = not self.use_hw_model
+            self.sim = self.hw_sim if self.use_hw_model else self.fp_sim
         if is_key_pressed(KeyboardKey.KEY_ONE):
             self.renderer.show_particles = not self.renderer.show_particles
         if is_key_pressed(KeyboardKey.KEY_A):
@@ -70,7 +78,6 @@ class MainApp:
         stir_mode = is_key_down(KeyboardKey.KEY_S)
         win_drag_mode = is_key_down(KeyboardKey.KEY_W)
 
-        # Hold W + Left-Drag to move the undecorated OS window
         if win_drag_mode and down:
             dx = mx - self.last_win_mx
             dy = my - self.last_win_my
@@ -81,7 +88,6 @@ class MainApp:
             self.last_win_mx = mx
             self.last_win_my = my
 
-        # Convert mouse cursor to 16x16 grid coordinates (matching buffer_b.glsl)
         mouse_grid = self.renderer.screen_to_grid(mx, my, self.sim.grid_size)
         if down and self.was_mouse_down:
             mouse_vel = (mouse_grid - self.prev_mouse_grid) / self.sim.dt
@@ -94,7 +100,6 @@ class MainApp:
         self.prev_mouse_grid = mouse_grid
         self.was_mouse_down = down
 
-        # Update target accelerometer gravity vector (matching buffer_b.glsl lines 38-45)
         tgt = self.gravity.copy()
         if self.auto_swirl:
             self.swirl_phase += 0.025
@@ -110,7 +115,6 @@ class MainApp:
         if is_key_down(KeyboardKey.KEY_G):
             tgt = np.array([0.0, -self.sim.gravity_mag], dtype=np.float32)
 
-        # Low-pass sensor filter (g += (tgt - g) * 0.25)
         self.gravity += (tgt - self.gravity) * 0.25
         gx_8bit = int(np.clip(round(self.gravity[0]), -127, 127))
         gy_8bit = int(np.clip(round(self.gravity[1]), -127, 127))

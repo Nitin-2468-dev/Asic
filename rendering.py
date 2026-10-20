@@ -16,26 +16,27 @@ from pyray import (
     draw_text,
     end_drawing,
 )
+from sim_hardware_model import HardwareFlip
 from simulation_fixed import FixedFlip
 
 WIDTH = 800
 HEIGHT = 800
 
 
-def _smoothstep(edge0, edge1, x):
-    t = np.clip((x - edge0) / (edge1 - edge0), 0.0, 1.0)
-    return float(t * t * (3.0 - 2.0 * t))
+def _smoothstep(edge0: float, edge1: float, x: float) -> float:
+    t = float(np.clip((x - edge0) / (edge1 - edge0), 0.0, 1.0))
+    return t * t * (3.0 - 2.0 * t)
 
 
 class PendantRenderer:
-    def __init__(self, width=WIDTH, height=HEIGHT):
+    def __init__(self, width: int = WIDTH, height: int = HEIGHT):
         self.width = width
         self.height = height
         self.show_particles = False   # Hidden by default (press '1' to toggle)
         self.green_theme = True       # True = Mitxela Emerald Green, False = AquaCell Cyan
         self.angled_smd = True        # True = 45-deg SMD 0402 LEDs, False = Round Shader LEDs
 
-    def grid_to_screen(self, gx, gy, grid_size=16):
+    def grid_to_screen(self, gx: float, gy: float, grid_size: int = 16) -> tuple[float, float, float]:
         scale = min(self.width / (grid_size + 2.5), self.height / (grid_size + 2.5))
         off_x = 0.5 * (self.width - scale * grid_size)
         off_y = 0.5 * (self.height - scale * grid_size)
@@ -43,7 +44,7 @@ class PendantRenderer:
         sy = self.height - (off_y + gy * scale)
         return sx, sy, scale
 
-    def screen_to_grid(self, sx, sy, grid_size=16):
+    def screen_to_grid(self, sx: float, sy: float, grid_size: int = 16) -> np.ndarray:
         scale = min(self.width / (grid_size + 2.5), self.height / (grid_size + 2.5))
         off_x = 0.5 * (self.width - scale * grid_size)
         off_y = 0.5 * (self.height - scale * grid_size)
@@ -51,12 +52,12 @@ class PendantRenderer:
         gy = ((self.height - sy) - off_y) / scale
         return np.array([gx, gy], dtype=np.float32)
 
-    def draw_pendant_matrix(self, sim: FixedFlip, stir_pos=None):
+    def draw_pendant_matrix(self, sim: FixedFlip | HardwareFlip, stir_pos: np.ndarray | None = None):
         N = sim.grid_size
         cx_scr, cy_scr, scale = self.grid_to_screen(N / 2.0, N / 2.0, N)
         center_vec = Vector2(cx_scr, cy_scr)
 
-        # 1. Pendant Gold Case & Bezel Ring (matches image.glsl & Mitxela pendant)
+        # 1. Pendant Gold Case & Bezel Ring
         bezel_inner = 8.45 * scale
         bezel_outer = 9.05 * scale
         loop_center = Vector2(cx_scr + 6.7 * scale, cy_scr + 6.7 * scale)
@@ -65,11 +66,11 @@ class PendantRenderer:
         draw_ring(center_vec, bezel_inner, bezel_outer, 0, 360, 96, Color(205, 160, 60, 255))
         draw_ring(center_vec, bezel_outer - 3, bezel_outer + 2, 0, 360, 96, Color(135, 100, 30, 255))
 
-        # 2. Gravity Direction Indicator Dot on Gold Bezel (from image.glsl)
-        gnorm = np.hypot(sim.gravity[0], sim.gravity[1])
+        # 2. Gravity Direction Indicator Dot on Gold Bezel
+        gnorm = float(np.hypot(sim.gravity[0], sim.gravity[1]))
         if gnorm > 1e-4:
-            gx_dir = sim.gravity[0] / gnorm
-            gy_dir = sim.gravity[1] / gnorm
+            gx_dir = float(sim.gravity[0]) / gnorm
+            gy_dir = float(sim.gravity[1]) / gnorm
         else:
             gx_dir, gy_dir = 0.0, -1.0
         ind_x, ind_y, _ = self.grid_to_screen(8.0 + gx_dir * 8.75, 8.0 + gy_dir * 8.75, N)
@@ -88,12 +89,10 @@ class PendantRenderer:
                 lx, ly, _ = self.grid_to_screen(x + 0.5, y + 0.5, N)
                 ix, iy = int(lx), int(ly)
 
-                # Smoothstep brightness curve directly from image.glsl (line 97)
                 d_ratio = float(sim.density[x, y]) / rest_d
                 b = _smoothstep(0.08, 1.0, d_ratio)
-                over_b = _smoothstep(0.85, 1.45, d_ratio)  # Hot white highlight for dense water
+                over_b = _smoothstep(0.85, 1.45, d_ratio)
 
-                # Unlit SMD LED package body (visible dark grey diode footprint on dark PCB)
                 if self.angled_smd:
                     rect = Rectangle(lx, ly, 0.52 * scale, 0.30 * scale)
                     origin = Vector2(0.26 * scale, 0.15 * scale)
@@ -103,22 +102,18 @@ class PendantRenderer:
 
                 if b > 0.005:
                     if self.green_theme:
-                        # Mitxela Pendant Emerald Green with white-green hot core
                         glow_col = Color(10, int(210 * b), int(45 * b), int(95 * b))
                         core_r = int(40 * b + 185 * over_b)
                         core_g = int(min(255, 70 + 185 * (b ** 0.7)))
                         core_b = int(35 * b + 165 * over_b)
                     else:
-                        # AquaCell ShaderToy Cyan-Blue (vec3(0.25, 0.75, 1.0))
                         glow_col = Color(int(45 * b), int(160 * b), int(245 * b), int(95 * b))
                         core_r = int(min(255, 64 * b + 160 * over_b))
                         core_g = int(min(255, 192 * (b ** 0.75) + 63 * over_b))
                         core_b = int(min(255, 255 * (b ** 0.65)))
 
-                    # Radial optical bloom around active LED
                     draw_circle_gradient(Vector2(ix, iy), bloom_r, glow_col, Color(0, 0, 0, 0))
 
-                    # Lit LED diode body
                     core_color = Color(core_r, core_g, core_b, 255)
                     if self.angled_smd:
                         rect = Rectangle(lx, ly, 0.52 * scale, 0.30 * scale)
@@ -139,7 +134,7 @@ class PendantRenderer:
         if self.show_particles:
             p_rad = max(2, int(0.24 * scale))
             for i in range(sim.amount):
-                px, py, _ = self.grid_to_screen(sim.positions[i, 0], sim.positions[i, 1], N)
+                px, py, _ = self.grid_to_screen(float(sim.positions[i, 0]), float(sim.positions[i, 1]), N)
                 speed = float(np.hypot(sim.velocity[i, 0], sim.velocity[i, 1]))
                 t_vel = min(speed / 25.0, 1.0)
                 pr = int(153 * (1.0 - t_vel) + 255 * t_vel)
@@ -149,15 +144,27 @@ class PendantRenderer:
 
         # 5. Stir Cursor Ring
         if stir_pos is not None:
-            sx, sy, _ = self.grid_to_screen(stir_pos[0], stir_pos[1], N)
+            sx, sy, _ = self.grid_to_screen(float(stir_pos[0]), float(stir_pos[1]), N)
             draw_circle_lines(int(sx), int(sy), 2.5 * scale, Color(255, 255, 255, 140))
 
-    def render(self, sim: FixedFlip, auto_swirl=False, stir_pos=None):
+    def render(
+        self,
+        sim: FixedFlip | HardwareFlip,
+        auto_swirl: bool = False,
+        stir_pos: np.ndarray | None = None,
+    ):
         begin_drawing()
         clear_background(Color(8, 9, 12, 255))
         self.draw_pendant_matrix(sim, stir_pos=stir_pos)
 
         draw_fps(12, 10)
+        if isinstance(sim, HardwareFlip):
+            pwr = "SLEEP (CLK GATED)" if sim.clock_gated_sleep else "ACTIVE"
+            hw_info = f"[H] Mode: HW-Q4.12  |  Hash Pairs: {sim.last_pair_checks} / 32640  |  ASIC: {pwr}"
+        else:
+            hw_info = "[H] Mode: Float32 Reference  |  Pairs: 32640 (O(N^2))"
+        draw_text(hw_info, 120, 12, 15, Color(120, 230, 150, 255))
+
         status = (
             f"[Drag] Tilt  [S+Drag] Stir  [A] Swirl:{'ON' if auto_swirl else 'OFF'}  "
             f"[Space] Shake  [1] Particles:{'ON' if self.show_particles else 'OFF'}  "
